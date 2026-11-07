@@ -541,7 +541,7 @@ async function geminiRequest(model, body) {
 async function callAI(prompt, maxTokens=6000, useSearch=false) {
   const body = {
     contents:[{parts:[{text:prompt}]}],
-    generationConfig:{ maxOutputTokens:maxTokens, temperature:0.2 },
+    generationConfig:{ maxOutputTokens:maxTokens, temperature:0.2, thinkingConfig:{thinkingLevel:'low'} }, // low thinking: otherwise reasoning tokens eat the JSON budget
   };
   const setSearch=(on)=>{ delete body.tools; delete body.generationConfig.responseMimeType;
     if(on) body.tools=[{google_search:{}}];                 // cannot combine with JSON mime type
@@ -558,6 +558,7 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
         if(res.status===404){ lastErr=new Error(`Model ${model} not available`); break; }
         if(!res.ok){
           const e=await res.text().catch(()=>'');
+          if(res.status===400&&/thinking/i.test(e)&&body.generationConfig.thinkingConfig){ delete body.generationConfig.thinkingConfig; lastErr=new Error('thinking unsupported'); continue; }
           if(res.status===400&&/API key|API_KEY/i.test(e)) { const x=new Error('BAD_KEY'); x.code='BAD_KEY'; throw x; }
           if(res.status===401||res.status===403){ const x=new Error('BAD_KEY'); x.code='BAD_KEY'; throw x; }
           throw new Error(`Gemini ${res.status}: ${e.slice(0,160)}`);
