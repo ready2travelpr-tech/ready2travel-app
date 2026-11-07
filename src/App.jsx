@@ -520,6 +520,7 @@ let USER_KEY = '';
 try { USER_KEY = localStorage.getItem('r2t_gemini_key') || ''; } catch(_) {}
 export function setUserKey(k){ USER_KEY=(k||'').trim(); try{ if(USER_KEY) localStorage.setItem('r2t_gemini_key',USER_KEY); else localStorage.removeItem('r2t_gemini_key'); }catch(_){} }
 let SEARCH_BLOCKED = false;
+const COOL = {}; // model -> timestamp until which it is skipped
 let PROXY_OK = null; let PROXY_INFO = '';
 const SHOW_KEY_UI = (()=>{try{return new URLSearchParams(window.location.search).has('key');}catch(_){return false;}})(); // null = unknown, true/false after first try
 const MODELS = ['gemini-3.5-flash','gemini-3.5-flash-lite','gemini-flash-latest'];
@@ -554,13 +555,16 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
   let searchOn = useSearch && !SEARCH_BLOCKED;
   setSearch(searchOn);
   let lastErr;
-  for(const model of MODELS){
-    for(let attempt=0; attempt<4; attempt++){
+  // Rotate across models: when one is overloaded (503/429/502) skip it for a while and try the next at once
+  for(let round=0; round<4; round++){
+    const now=Date.now();
+    const order=[...MODELS].sort((x,y)=>((COOL[x]||0)>now)-((COOL[y]||0)>now));
+    for(const model of order){
       try{
         const res = await geminiRequest(model, body);
-        if(res.status===429&&searchOn){ SEARCH_BLOCKED=true; searchOn=false; setSearch(false); lastErr=new Error('Search quota'); continue; } // free key: no live search -> use price anchors
-        if(res.status===429||res.status===503||res.status===500){ lastErr=new Error(`Gemini ${res.status}`); await sleep(6000*(attempt+1)); continue; }
-        if(res.status===404){ lastErr=new Error(`Model ${model} not available`); break; }
+        if(res.status===429&&searchOn){ SEARCH_BLOCKED=true; searchOn=false; setSearch(false); lastErr=new Error('Search quota'); continue; } // free key: no live search -> price anchors
+        if([429,500,502,503,504].includes(res.status)){ COOL[model]=Date.now()+(res.status===429?25000:15000); lastErr=new Error(`Gemini ${res.status}`); continue; }
+        if(res.status===404){ COOL[model]=Date.now()+600000; lastErr=new Error(`Model ${model} not available`); continue; }
         if(!res.ok){
           const e=await res.text().catch(()=>'');
           if(res.status===400&&/thinking/i.test(e)&&body.generationConfig.thinkingConfig){ delete body.generationConfig.thinkingConfig; lastErr=new Error('thinking unsupported'); continue; }
@@ -570,10 +574,11 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
         }
         const data=await res.json();
         const text=(data?.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('\n');
-        if(!text.trim()){ lastErr=new Error('Empty response'); await sleep(2000); continue; }
-        try{ return parseJSON(text); }catch(pe){ lastErr=pe; if(attempt>=1) break; await sleep(1500); }
-      }catch(e){ if(e.code==='NO_KEY'||e.code==='BAD_KEY') throw e; lastErr=e; await sleep(2000); }
+        if(!text.trim()){ lastErr=new Error('Empty response'); continue; }
+        try{ return parseJSON(text); }catch(pe){ lastErr=pe; continue; }
+      }catch(e){ if(e.code==='NO_KEY'||e.code==='BAD_KEY') throw e; lastErr=e; }
     }
+    await sleep(3000*(round+1));
   }
   throw lastErr||new Error('AI unavailable');
 }
@@ -1035,7 +1040,7 @@ STRICT RULES — TIME ACCURACY IS CRITICAL:
   "type":"meal|attraction|transport|accommodation"
 }]}]}
 All ${g.days.length} days. ONLY JSON.`;
-          const r2=await callAI(p2,10000);
+          const r2=await callAI(p2,Math.min(10000,1800*g.days.length+2500));
           itinArr[gi]=r2?.days||[];
         }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Itinerary error:',e.message);itinArr[gi]=[];}
       });
@@ -1045,7 +1050,7 @@ All ${g.days.length} days. ONLY JSON.`;
       let doneN=0;
       const progress=()=>setLoadMsg(tLang==='es'?`🧠 Preparando tu viaje… ${doneN} de ${allTasks.length} partes listas`:`🧠 Building your trip… ${doneN} of ${allTasks.length} parts ready`);
       progress();
-      await runPool(allTasks.map(t=>async()=>{await t();doneN++;progress();}),4);
+      await runPool(allTasks.map(t=>async()=>{await t();doneN++;progress();}),3);
       } // end else (real AI generation)
 
       const seen=new Set();
