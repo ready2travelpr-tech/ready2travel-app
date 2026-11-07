@@ -1,5 +1,5 @@
 // Netlify Function: keeps the Gemini key server-side (env var GEMINI_API_KEY).
-const ALLOWED = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+const ALLOWED = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-flash-latest'];
 export default async (req) => {
   const key = (process.env.GEMINI_API_KEY || '').trim();
   if (req.method === 'GET') return new Response(JSON.stringify({ function: 'ok', hasKey: !!key }), { headers: { 'Content-Type': 'application/json' } });
