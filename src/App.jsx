@@ -919,7 +919,7 @@ ${includeFlights?`- Flights to destination: $${fl[0]}–$${fl[1]}/person round-t
       const legInfo=(a,b)=>facts?.legs?.find(l=>l.from===a&&l.to===b);
       const liveFor=(dn)=>{ if(!facts)return ''; const L=[]; const w=facts.weather?.[dn], c=facts.fx?.[dn];
         if(w)L.push(`WEATHER (Open-Meteo, real data): ${w}`);
-        if(c)L.push(`CURRENCY (live rate): ${c.name} (${c.symbol||c.code}, ${c.code}) — 1 USD = ${c.perUSD||'?'} ${c.code}`);
+        if(c)L.push(`CURRENCY (live rate, ${new Date().toISOString().slice(0,10)}): ${c.code} — 1 USD = ${c.perUSD||'?'} ${c.code}`);
         return L.length?`REAL-TIME DATA — use these exact figures, do not contradict them:\n${L.join('\n')}`:''; };
       // ── BUDGET (with Google Search grounding for real prices) ──
       const budgetTasks=destInfo.map((dest,di)=>async()=>{
