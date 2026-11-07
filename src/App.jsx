@@ -519,7 +519,7 @@ function parseJSON(text) {
 let USER_KEY = '';
 try { USER_KEY = localStorage.getItem('r2t_gemini_key') || ''; } catch(_) {}
 export function setUserKey(k){ USER_KEY=(k||'').trim(); try{ if(USER_KEY) localStorage.setItem('r2t_gemini_key',USER_KEY); else localStorage.removeItem('r2t_gemini_key'); }catch(_){} }
-let SEARCH_BLOCKED = false;
+let SEARCH_BLOCKED = true; // live Google Search needs a billed Gemini project; set to false after enabling billing
 const COOL = {}; // model -> timestamp until which it is skipped
 let PROXY_OK = null; let PROXY_INFO = '';
 const SHOW_KEY_UI = (()=>{try{return new URLSearchParams(window.location.search).has('key');}catch(_){return false;}})(); // null = unknown, true/false after first try
@@ -990,8 +990,7 @@ ${famHighlights.length?'FAMOUS TRIP HIGHLIGHTS: '+famHighlights.join(', '):''}
 Include: landmarks, restaurants (with cuisine type & price range), cafes, parks, museums, local experiences.
 {"places":[{"name":"Real Place Name","type":"landmark|restaurant|cafe|park|museum|experience|beach","cost":"$X admission or Free","duration":"full-day|4hrs|2hrs|1hr|30min","bestTime":"morning|afternoon|evening","rating":"4.5/5"}]}
 All places must be REAL and exist. NO duplicates. ONLY JSON.`;
-          const r1=await callAI(p1,4000);
-          const places=(r1?.places||[]).filter(p=>p.name);
+          const places=[]; // one call less per stop: the schedule prompt picks real, unique places itself
 
           // Phase 2: build schedule
           const placeList=places.length>0?`USE THESE ${places.length} REAL PLACES (each exactly once):\n`+places.map((p,i)=>`${i+1}. ${p.name} [${p.type}] ${p.cost||'varies'} ~${p.duration||'2hrs'} best:${p.bestTime||'anytime'} ★${p.rating||'4/5'}`).join('\n'):`Choose ${numFull*6+10} unique real places in ${g.dest}`;
