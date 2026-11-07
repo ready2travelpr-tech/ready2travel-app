@@ -538,6 +538,11 @@ async function geminiRequest(model, body) {
     {method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':USER_KEY},body:JSON.stringify(body)});
 }
 
+async function runPool(tasks,limit=4){
+  let i=0; const worker=async()=>{ while(i<tasks.length){ const t=tasks[i++]; await t(); } };
+  await Promise.all(Array.from({length:Math.min(limit,tasks.length)},worker));
+}
+
 async function callAI(prompt, maxTokens=6000, useSearch=false) {
   const body = {
     contents:[{parts:[{text:prompt}]}],
@@ -884,11 +889,9 @@ ${includeFlights?`- Flights to destination: $${fl[0]}–$${fl[1]}/person round-t
         }
       } else {
       // ── BUDGET (with Google Search grounding for real prices) ──
-      for(let di=0; di<destInfo.length; di++){
-        const dest=destInfo[di];
+      const budgetTasks=destInfo.map((dest,di)=>async()=>{
         const isFirstDest=di===0;
         const legOrigin=di===0?originLabel:destInfo[di-1].name; // each leg starts from the PREVIOUS stop, not always from home
-        setLoadMsg(`💰 ${TR[tLang].loading[5]} — ${dest.name}`);
         try{
           const gasLine=drivingTheRoute?`Driving distance ${legOrigin}→${dest.name} (this leg only): estimate miles, calculate gas: (miles÷${PA.mpg})×$${PA.gas}/gal = $X total fuel for group, ÷${numT} per person.`:'';
           const openJaw = isMultiStopTrip && includeFlights;
@@ -932,14 +935,12 @@ Return EXACTLY this JSON structure:
     {"icon":"💼","cat":"${outputLang==='Spanish'?'Extras':'Extras'}","pp":0,"total":0,"detail":"Travel insurance ~$X, tips/gratuity ~$X, souvenirs ~$X, misc ~$X","links":""}
   ]
 }]}`;
-          const r=await callAI(prompt,7000,true); budgetArr.push(fixBudget(r,numT,perDestBudget));
-        }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Budget error:',e.message);budgetArr.push({budget:[]});}
-        await new Promise(r=>setTimeout(r,4500));
-      }
+          const r=await callAI(prompt,7000,true); budgetArr[di]=fixBudget(r,numT,perDestBudget);
+        }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Budget error:',e.message);budgetArr[di]={budget:[]};}
+      });
 
       // ── TIPS ──
-      for(const dest of [...new Set(destInfo.map(d=>d.name))]){
-        setLoadMsg(`💡 ${TR[tLang].loading[4]} — ${dest}`);
+      const tipTasks=[...new Set(destInfo.map(d=>d.name))].map((dest,ti)=>async()=>{
         try{
           const prompt=`You are a meticulous travel expert for ${dest} who answers EVERY question a first-time visitor would have. Use real, current, specific information — never generic placeholders. ALL IN ${outputLang}. OUTPUT ONLY RAW JSON.
 Nationality: ${sanNat} | Travel: ${sd} to ${rd} | Style: ${style} | ${stayCtx} | ${kidsCtx} | Transport: ${drivingTheRoute?'driving/road trip':(includeFlights?'flying, using local transit':'')}
@@ -965,15 +966,12 @@ ${borderCtx}
   "emergency":"police, ambulance, fire emergency numbers, plus the nearest embassy/consulate info if relevant for ${sanNat} citizens",
   "highlights":["top highlight 1 with a specific reason it's unmissable (not generic)","highlight 2","highlight 3"]
 }]}`;
-          const r=await callAI(prompt,5500); tipsArr.push(r);
-        }catch(e){tipsArr.push({tips:[]});}
-        await new Promise(r=>setTimeout(r,4500));
-      }
+          const r=await callAI(prompt,5500); tipsArr[ti]=r;
+        }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;tipsArr[ti]={tips:[]};}
+      });
 
       // ── ITINERARY ──
-      setLoadMsg(TR[tLang].loading[2]);
-      for(const g of groups){
-        setLoadMsg(`🗺️ ${TR[tLang].loading[3]} — ${g.dest}`);
+      const itinTasks=groups.map((g,gi)=>async()=>{
         const dQ=encodeURIComponent(g.dest);
         const numFull=g.days.filter(d=>d.dayType==='FULL').length;
         const famHighlights=selTrip?(selTrip.highlights||[]).filter(h=>h.toLowerCase().includes(g.dest.split(',')[0].toLowerCase())):[];
@@ -989,7 +987,6 @@ Include: landmarks, restaurants (with cuisine type & price range), cafes, parks,
 All places must be REAL and exist. NO duplicates. ONLY JSON.`;
           const r1=await callAI(p1,4000);
           const places=(r1?.places||[]).filter(p=>p.name);
-          await new Promise(r=>setTimeout(r,4500));
 
           // Phase 2: build schedule
           const placeList=places.length>0?`USE THESE ${places.length} REAL PLACES (each exactly once):\n`+places.map((p,i)=>`${i+1}. ${p.name} [${p.type}] ${p.cost||'varies'} ~${p.duration||'2hrs'} best:${p.bestTime||'anytime'} ★${p.rating||'4/5'}`).join('\n'):`Choose ${numFull*6+10} unique real places in ${g.dest}`;
@@ -1039,10 +1036,16 @@ STRICT RULES — TIME ACCURACY IS CRITICAL:
 }]}]}
 All ${g.days.length} days. ONLY JSON.`;
           const r2=await callAI(p2,10000);
-          itinArr.push(r2?.days||[]);
-        }catch(e){console.warn('Itinerary error:',e.message);itinArr.push([]);}
-        await new Promise(r=>setTimeout(r,4500));
-      }
+          itinArr[gi]=r2?.days||[];
+        }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Itinerary error:',e.message);itinArr[gi]=[];}
+      });
+
+      // Run everything in parallel (4 at a time) instead of one-by-one with fixed pauses
+      const allTasks=[...budgetTasks,...tipTasks,...itinTasks];
+      let doneN=0;
+      const progress=()=>setLoadMsg(tLang==='es'?`🧠 Preparando tu viaje… ${doneN} de ${allTasks.length} partes listas`:`🧠 Building your trip… ${doneN} of ${allTasks.length} parts ready`);
+      progress();
+      await runPool(allTasks.map(t=>async()=>{await t();doneN++;progress();}),4);
       } // end else (real AI generation)
 
       const seen=new Set();
