@@ -18,6 +18,7 @@ async function geocode(q) {
   if (n?.[0]) return { lat: +n[0].lat, lon: +n[0].lon, cc: (n[0].address?.country_code || '').toUpperCase(), country: n[0].address?.country || '' };
   return null;
 }
+const CC = {US:'USD',PR:'USD',VI:'USD',GU:'USD',EC:'USD',SV:'USD',PA:'USD',MX:'MXN',CA:'CAD',GB:'GBP',CH:'CHF',JP:'JPY',CN:'CNY',KR:'KRW',IN:'INR',AU:'AUD',NZ:'NZD',BR:'BRL',AR:'ARS',CL:'CLP',CO:'COP',PE:'PEN',UY:'UYU',PY:'PYG',BO:'BOB',VE:'VES',CR:'CRC',GT:'GTQ',HN:'HNL',NI:'NIO',DO:'DOP',CU:'CUP',JM:'JMD',BS:'BSD',BB:'BBD',TT:'TTD',HT:'HTG',AW:'AWG',TH:'THB',VN:'VND',ID:'IDR',MY:'MYR',SG:'SGD',PH:'PHP',TR:'TRY',EG:'EGP',MA:'MAD',ZA:'ZAR',KE:'KES',NG:'NGN',AE:'AED',SA:'SAR',IL:'ILS',JO:'JOD',QA:'QAR',RU:'RUB',UA:'UAH',PL:'PLN',CZ:'CZK',HU:'HUF',RO:'RON',BG:'BGN',DK:'DKK',SE:'SEK',NO:'NOK',IS:'ISK',HR:'EUR',FR:'EUR',DE:'EUR',ES:'EUR',IT:'EUR',PT:'EUR',NL:'EUR',BE:'EUR',AT:'EUR',IE:'EUR',GR:'EUR',FI:'EUR',LU:'EUR',MT:'EUR',CY:'EUR',SK:'EUR',SI:'EUR',EE:'EUR',LV:'EUR',LT:'EUR'};
 const iso = d => d.toISOString().slice(0, 10);
 async function weather(g, start, end) {
   if (!g || !start || !end) return null;
@@ -44,11 +45,9 @@ async function weather(g, start, end) {
   return `${kind}: highs ~${hi}°F/${c(hi)}°C, lows ~${lo}°F/${c(lo)}°C, ${rain}`;
 }
 async function currency(cc, rates) {
-  if (!cc) return null;
-  const d = await get(`https://restcountries.com/v3.1/alpha/${cc}?fields=currencies`);
-  const cur = d?.currencies || d?.[0]?.currencies; if (!cur) return null;
-  const code = Object.keys(cur)[0]; const rate = rates?.[code];
-  return { code, name: cur[code]?.name, symbol: cur[code]?.symbol, perUSD: rate ? +rate.toFixed(4) : null };
+  const code = CC[cc]; if (!code) return null;
+  const rate = code === 'USD' ? 1 : rates?.[code];
+  return { code, perUSD: rate ? +Number(rate).toFixed(4) : null };
 }
 async function leg(a, b) {
   if (!a || !b) return null;
