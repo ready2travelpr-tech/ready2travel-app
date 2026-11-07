@@ -998,11 +998,11 @@ All places must be REAL and exist. NO duplicates. ONLY JSON.`;
             const transitByCar = drivingTheRoute; // between-stops movement: car if driving the whole way OR flew+rented a car
             if(d.dayType==='ARRIVAL'){
               if(gtm==='fly') return `Day ${d.num} (${d.date}): ARRIVAL — fly from ${sanAp} into ${originLabel}. Include: airport arrival${includeCar?', rental car pickup':''}, hotel check-in, 1 nearby welcome activity, dinner.`;
-              return `Day ${d.num} (${d.date}): ARRIVAL — drive from ${originLabel}${crossingBorder?' (crossing an international border — mention border checkpoint, passport check, brief wait)':''}. Include: drive start, rest stop, hotel/accommodation check-in, 1 welcome activity nearby, dinner with local specialty.`;
+              return `Day ${d.num} (${d.date}): ARRIVAL — the traveler DRIVES THEIR OWN CAR from ${originLabel} (NO airport, NO rental car, NO flights) ${crossingBorder?' (crossing an international border — mention border checkpoint, passport check, brief wait)':''}. Include: drive start, rest stop, hotel/accommodation check-in, 1 welcome activity nearby, dinner with local specialty.`;
             }
             if(d.dayType==='RETURN'){
               if(gtm==='fly') return `Day ${d.num} (${d.date}): RETURN — Include: hotel breakfast, 1 final activity, hotel checkout${includeCar?', drop off rental car':''}, fly back to ${sanAp} from ${g.dest}${isMultiStopTrip?' (open-jaw return — different city than arrival)':''}.`;
-              return `Day ${d.num} (${d.date}): RETURN — Include: hotel breakfast, 1 final activity (not far from departure), ${includeHotel?'hotel checkout, ':''}drive back to ${originLabel}${crossingBorder?' (crossing the border again — mention checkpoint)':''}.`;
+              return `Day ${d.num} (${d.date}): RETURN — own car, NO airport or rental car. Include: hotel breakfast, 1 final activity (not far from departure), ${includeHotel?'hotel checkout, ':''}drive back to ${originLabel}${crossingBorder?' (crossing the border again — mention checkpoint)':''}.`;
             }
             if(d.dayType==='TRANSIT') return `Day ${d.num} (${d.date}): TRANSIT — Breakfast, 1 morning activity in ${g.dest}, ${transitByCar?'drive':'fly'} to ${g.nextDest}, arrive and settle.`;
             return `Day ${d.num} (${d.date}): FULL DAY — 6 activities spread across the day: morning (breakfast spot, activity), midday (lunch + 1-2 spots), afternoon (activity), evening (dinner + optional evening activity). Include realistic travel time between spots and note transit time (walk/drive/transit minutes) whenever consecutive activities are more than a short walk apart.`;
