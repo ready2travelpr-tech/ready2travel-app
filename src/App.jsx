@@ -327,8 +327,8 @@ const TR = {
     bookFlights:"Flights", bookHotel:"Hotels",
     bookCar:"Car Rental", bookAttractions:"Attractions",
     bookFood:"Restaurants", openLink:"Book →",
-    priceNote:"Prices are AI estimates grounded in 2025 rates. Verify before booking.",
-    loadingSubtitle:"Generating your personalized plan with real 2025 prices…",
+    priceNote:"Prices are AI estimates based on current market rates and live data (weather, exchange rate, routes). Verify before booking.",
+    loadingSubtitle:"Generating your personalized plan with live data and current prices…",
     loadingTime:"Takes 60–120 seconds. Please wait.",
     loading:["🔍 Researching current flight prices...","🏨 Finding real hotel rates...","🗺 Building your day-by-day itinerary...","📋 Scheduling activities with realistic timing...","💡 Researching entry requirements & local tips...","💰 Calculating precise costs...","🌍 Finalizing your complete plan..."],
     errorGen:"Generation failed. Check your API key and try again.",
@@ -407,8 +407,8 @@ const TR = {
     bookFlights:"Vuelos", bookHotel:"Hoteles",
     bookCar:"Carro", bookAttractions:"Atracciones",
     bookFood:"Restaurantes", openLink:"Reservar →",
-    priceNote:"Precios son estimados de IA basados en tarifas reales 2025. Verifica antes de reservar.",
-    loadingSubtitle:"Generando tu plan personalizado con precios reales 2025…",
+    priceNote:"Precios estimados por IA con tarifas actuales y datos en vivo (clima, cambio, rutas). Verifica antes de reservar.",
+    loadingSubtitle:"Generando tu plan personalizado con datos y precios actuales…",
     loadingTime:"Toma 60–120 segundos. Por favor espera.",
     loading:["🔍 Investigando precios actuales de vuelos...","🏨 Buscando tarifas reales de hoteles...","🗺 Construyendo tu itinerario día por día...","📋 Programando actividades con tiempos realistas...","💡 Investigando requisitos de entrada y tips locales...","💰 Calculando costos precisos...","🌍 Finalizando tu plan completo..."],
     errorGen:"Error al generar. Verifica tu API key e intenta de nuevo.",
@@ -845,16 +845,18 @@ ${includeFlights?`- Flights to destination: $${fl[0]}–$${fl[1]}/person round-t
 - Attractions: $${PA.attraction[bt][0]}–$${PA.attraction[bt][1]}/person average`;
 
     const start=new Date(sd+'T12:00:00'), ret=new Date(rd+'T12:00:00');
-    const totalDays=Math.max(1,Math.round((ret-start)/(86400000)));
+    const totalDays=Math.max(1,Math.round((ret-start)/(86400000))+1); // calendar days: depart day through return day
     const daysPerDest=Math.max(1,Math.floor(totalDays/valid.length));
     const rem=totalDays-daysPerDest*valid.length;
     let cur=new Date(sd+'T12:00:00');
     const destInfo=valid.map((d,i)=>{
       const days=daysPerDest+(i===valid.length-1?rem:0);
       const from=cur.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      const endD=new Date(cur); endD.setDate(endD.getDate()+days-1);
+      const to=endD.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
       cur.setDate(cur.getDate()+days);
-      const to=cur.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-      return {name:(d.name||'').replace(/["`]/g,' ').trim(),places:(d.places||'').replace(/["`]/g,' ').trim(),days,dateRange:`${from} to ${to}`};
+      const nights=Math.max(1,days-(i===valid.length-1?1:0)); // last stop: you leave on the last day
+      return {name:(d.name||'').replace(/["`]/g,' ').trim(),places:(d.places||'').replace(/["`]/g,' ').trim(),days,nights,dateRange:`${from} to ${to}`};
     });
     const perDestBudget=Math.round(Number(bg)/destInfo.length);
 
@@ -946,7 +948,7 @@ TRIP LEG: ${legOrigin} → ${dest.name} | ${dest.days} days (${dest.dateRange}) 
 
 MANDATORY CALCULATION RULES:
 1. Total = sum of all row totals. estimatedPP = total ÷ ${numT}. Show your math in detail fields.
-2. Hotel: ${includeHotel?`${dest.days} nights × real current rate ($${h[0]}–$${h[1]}/night) × 1 room`:'$0 — day trip, returns home'}
+2. Hotel: ${includeHotel?`${dest.nights} nights × real current rate ($${h[0]}–$${h[1]}/night) × 1 room`:'$0 — day trip, returns home'}
 3. Food: ${dest.days} days × $X/day × ${numT} people (use real local costs)
 4. Attractions: list 3–5 real attractions with actual admission prices (search real prices)
 5. ${drivingTheRoute?`Gas: calculate driving miles ONLY for this leg (${legOrigin} to ${dest.name}), use $${gp}/gal`:(includeFlights?'Flights: use current airline prices, include real airline names':'Local transport: estimate realistic public transit/rideshare costs')}
@@ -962,7 +964,7 @@ Return EXACTLY this JSON structure:
   "flightDetail":"${isFirstDest&&includeFlights?(openJaw?'One-time flight into '+legOrigin+' — open-jaw, returns from final destination. Real airline, ~$X/person.':'Round-trip flight. Real airline, ~$X/person.'):'N/A — already counted or not applicable'}",
   "rows":[
     ${isFirstDest&&includeFlights?`{"icon":"✈️","cat":"${outputLang==='Spanish'?'Vuelos':'Flights'}","pp":0,"total":0,"detail":"[Real airline] One-time flight ${openJaw?'into '+legOrigin+' (open-jaw, returns from final destination city)':'round-trip'} from ${originCode}. ~$X/person. Total for ${numT}: $X","links":"Google Flights, Kayak"},`:''}
-    {"icon":"🏨","cat":"${includeHotel?(outputLang==='Spanish'?'Hotel':'Hotel'):(outputLang==='Spanish'?'Alojamiento':'Accommodation')}","pp":${includeHotel?0:0},"total":${includeHotel?0:0},"detail":"${includeHotel?`[Hotel name area] ~$${h[0]}-${h[1]}/night × ${dest.days} nights = ~$X`:'Day trip — $0 hotel cost'}","links":"${includeHotel?'Booking.com, Airbnb':'N/A'}"},
+    {"icon":"🏨","cat":"${includeHotel?(outputLang==='Spanish'?'Hotel':'Hotel'):(outputLang==='Spanish'?'Alojamiento':'Accommodation')}","pp":${includeHotel?0:0},"total":${includeHotel?0:0},"detail":"${includeHotel?`[Hotel name area] ~$${h[0]}-${h[1]}/night × ${dest.nights} nights = ~$X`:'Day trip — $0 hotel cost'}","links":"${includeHotel?'Booking.com, Airbnb':'N/A'}"},
     ${includeCar?`{"icon":"🚗","cat":"${outputLang==='Spanish'?'Carro':'Car Rental'}","pp":0,"total":0,"detail":"~$${c[0]}-${c[1]}/day × ${dest.days} days (this leg) = ~$X total","links":"Miles Car Rental, Hertz, Enterprise"},`:''}
     {"icon":"⛽","cat":"${drivingTheRoute?(outputLang==='Spanish'?'Gasolina':'Gas & Tolls'):(outputLang==='Spanish'?'Transporte Local':'Local Transport')}","pp":0,"total":0,"detail":"${drivingTheRoute?`~X miles driving (${legOrigin}→${dest.name}) ÷ ${PA.mpg}mpg × $${gp}/gal = ~$X fuel. Tolls: ~$X`:'Uber/Lyft/Metro/train ~$X/day × '+dest.days+' days'}","links":""},
     {"icon":"🍽️","cat":"${outputLang==='Spanish'?'Comida':'Food & Dining'}","pp":0,"total":0,"detail":"$X/person/day × ${dest.days} days × ${numT} people = $X. Breakdown: breakfast $X, lunch $X, dinner $X","links":""},
@@ -970,7 +972,7 @@ Return EXACTLY this JSON structure:
     {"icon":"💼","cat":"${outputLang==='Spanish'?'Extras':'Extras'}","pp":0,"total":0,"detail":"Travel insurance ~$X, tips/gratuity ~$X, souvenirs ~$X, misc ~$X","links":""}
   ]
 }]}`;
-          const r=await callAI(prompt,7000,true); budgetArr[di]=fixBudget(r,numT,perDestBudget,{hotel:includeHotel?h[0]*dest.days:0,food:f[0]*dest.days*numT});
+          const r=await callAI(prompt,7000,true); budgetArr[di]=fixBudget(r,numT,perDestBudget,{hotel:includeHotel?h[0]*dest.nights:0,food:f[0]*dest.days*numT});
         }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Budget error:',e.message);budgetArr[di]={budget:[]};}
       });
 
@@ -1308,7 +1310,7 @@ All ${g.days.length} days. ONLY JSON.`;
                 <div><label style={lbl}>📅 {t.startDate}</label><input type="date" value={startDate} onChange={e=>{setStartDate(e.target.value);if(returnDate&&e.target.value>=returnDate)setReturnDate('');}} min={new Date().toISOString().split('T')[0]} style={inp}/></div>
                 <div><label style={lbl}>🔙 {t.returnDate}</label><input type="date" value={returnDate} onChange={e=>setReturnDate(e.target.value)} min={startDate||new Date().toISOString().split('T')[0]} style={inp}/></div>
               </div>
-              {startDate&&returnDate&&(()=>{const days=Math.round((new Date(returnDate+'T12:00:00')-new Date(startDate+'T12:00:00'))/86400000);const nd=dests.filter(d=>d.name.trim()).length;return days>0?<div style={{background:`${C.gold}22`,border:`1px solid ${C.gold}55`,borderRadius:8,padding:'8px 14px',marginBottom:16,fontSize:13,color:C.charcoal,fontWeight:600}}>🗓 {days} {t.days} / {days-1} {t.nights}{nd>1?` — ~${Math.floor(days/nd)} ${t.perDestDays}`:''}</div>:null;})()}
+              {startDate&&returnDate&&(()=>{const days=Math.round((new Date(returnDate+'T12:00:00')-new Date(startDate+'T12:00:00'))/86400000);const nd=dests.filter(d=>d.name.trim()).length;return days>0?<div style={{background:`${C.gold}22`,border:`1px solid ${C.gold}55`,borderRadius:8,padding:'8px 14px',marginBottom:16,fontSize:13,color:C.charcoal,fontWeight:600}}>🗓 {days+1} {t.days} / {days} {t.nights}{nd>1?` — ~${Math.floor((days+1)/nd)} ${t.perDestDays}`:''}</div>:null;})()}
 
               {/* Travelers + Nationality */}
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:16}}>
