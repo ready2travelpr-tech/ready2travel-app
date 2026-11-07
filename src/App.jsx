@@ -519,9 +519,10 @@ function parseJSON(text) {
 let USER_KEY = '';
 try { USER_KEY = localStorage.getItem('r2t_gemini_key') || ''; } catch(_) {}
 export function setUserKey(k){ USER_KEY=(k||'').trim(); try{ if(USER_KEY) localStorage.setItem('r2t_gemini_key',USER_KEY); else localStorage.removeItem('r2t_gemini_key'); }catch(_){} }
+let SEARCH_BLOCKED = false;
 let PROXY_OK = null; let PROXY_INFO = '';
 const SHOW_KEY_UI = (()=>{try{return new URLSearchParams(window.location.search).has('key');}catch(_){return false;}})(); // null = unknown, true/false after first try
-const MODELS = ['gemini-2.5-flash','gemini-2.0-flash'];
+const MODELS = ['gemini-3.5-flash','gemini-3.5-flash-lite','gemini-flash-latest'];
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 async function geminiRequest(model, body) {
@@ -542,13 +543,17 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
     contents:[{parts:[{text:prompt}]}],
     generationConfig:{ maxOutputTokens:maxTokens, temperature:0.2 },
   };
-  if(useSearch) body.tools=[{google_search:{}}];            // cannot combine with JSON mime type
-  else body.generationConfig.responseMimeType='application/json';
+  const setSearch=(on)=>{ delete body.tools; delete body.generationConfig.responseMimeType;
+    if(on) body.tools=[{google_search:{}}];                 // cannot combine with JSON mime type
+    else body.generationConfig.responseMimeType='application/json'; };
+  let searchOn = useSearch && !SEARCH_BLOCKED;
+  setSearch(searchOn);
   let lastErr;
   for(const model of MODELS){
     for(let attempt=0; attempt<4; attempt++){
       try{
         const res = await geminiRequest(model, body);
+        if(res.status===429&&searchOn){ SEARCH_BLOCKED=true; searchOn=false; setSearch(false); lastErr=new Error('Search quota'); continue; } // free key: no live search -> use price anchors
         if(res.status===429||res.status===503||res.status===500){ lastErr=new Error(`Gemini ${res.status}`); await sleep(6000*(attempt+1)); continue; }
         if(res.status===404){ lastErr=new Error(`Model ${model} not available`); break; }
         if(!res.ok){
