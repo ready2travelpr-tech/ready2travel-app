@@ -556,7 +556,7 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
   setSearch(searchOn);
   let lastErr;
   // Rotate across models: when one is overloaded (503/429/502) skip it for a while and try the next at once
-  for(let round=0; round<4; round++){
+  for(let round=0; round<5; round++){
     const now=Date.now();
     const order=[...MODELS].sort((x,y)=>((COOL[x]||0)>now)-((COOL[y]||0)>now));
     for(const model of order){
@@ -578,7 +578,7 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
         try{ return parseJSON(text); }catch(pe){ lastErr=pe; continue; }
       }catch(e){ if(e.code==='NO_KEY'||e.code==='BAD_KEY') throw e; lastErr=e; }
     }
-    await sleep(3000*(round+1));
+    await sleep(5000*(round+1));
   }
   throw lastErr||new Error('AI unavailable');
 }
@@ -1050,7 +1050,18 @@ All ${g.days.length} days. ONLY JSON.`;
       let doneN=0;
       const progress=()=>setLoadMsg(tLang==='es'?`🧠 Preparando tu viaje… ${doneN} de ${allTasks.length} partes listas`:`🧠 Building your trip… ${doneN} of ${allTasks.length} parts ready`);
       progress();
-      await runPool(allTasks.map(t=>async()=>{await t();doneN++;progress();}),3);
+      await runPool(allTasks.map(t=>async()=>{await t();doneN++;progress();}),2);
+      // Retry anything that came back empty (rate limits): up to 3 extra passes, spaced out
+      for(let pass=0; pass<3; pass++){
+        const redo=[];
+        budgetTasks.forEach((t,i)=>{ if(!(budgetArr[i]?.budget?.length)) redo.push(t); });
+        tipTasks.forEach((t,i)=>{ if(!(tipsArr[i]?.tips?.length)) redo.push(t); });
+        itinTasks.forEach((t,i)=>{ if(!(itinArr[i]?.length)) redo.push(t); });
+        if(!redo.length) break;
+        setLoadMsg(tLang==='es'?`⏳ Reintentando ${redo.length} parte(s) (límite de la IA)…`:`⏳ Retrying ${redo.length} part(s) (AI rate limit)…`);
+        await sleep(25000);
+        await runPool(redo,2);
+      }
       } // end else (real AI generation)
 
       const seen=new Set();
