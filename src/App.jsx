@@ -539,6 +539,14 @@ async function geminiRequest(model, body) {
     {method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':USER_KEY},body:JSON.stringify(body)});
 }
 
+/* The model sometimes returns a flat list of strings instead of one structured object: always normalise */
+function normTips(r,dest){
+  let arr=Array.isArray(r?.tips)?r.tips:(r&&typeof r==='object'?[r]:[]);
+  if(arr.length&&arr.every(x=>typeof x==='string')) arr=[{tips:arr}];
+  arr=arr.filter(x=>x&&typeof x==='object'&&!Array.isArray(x)).slice(0,1).map(x=>({...x,dest}));
+  return {tips:arr};
+}
+
 async function runPool(tasks,limit=4){
   let i=0; const worker=async()=>{ while(i<tasks.length){ const t=tasks[i++]; await t(); } };
   await Promise.all(Array.from({length:Math.min(limit,tasks.length)},worker));
@@ -584,12 +592,16 @@ async function callAI(prompt, maxTokens=6000, useSearch=false) {
 }
 
 /* Recompute every total in code — never trust the model's arithmetic */
-function fixBudget(r, numT, allocated){
+function fixBudget(r, numT, allocated, floors={}){
   const list=(r&&r.budget)||[];
   list.forEach(d=>{
     const rows=(d.rows||[]).map(x=>{
-      const total=Math.max(0,Math.round(Number(x.total)||(Number(x.pp)||0)*numT));
-      return {...x,total,pp:Math.round(total/numT)};
+      let total=Math.max(0,Math.round(Number(x.total)||(Number(x.pp)||0)*numT));
+      let detail=x.detail;
+      // realistic minimums (anchored on real price ranges) so the model cannot squeeze rows to hit the budget
+      const floor=/🏨/.test(x.icon||'')?floors.hotel:/🍽/.test(x.icon||'')?floors.food:0;
+      if(floor&&total<floor){ total=Math.round(floor); detail=(detail||'')+' ⚠ ajustado al mínimo realista / raised to realistic minimum'; }
+      return {...x,total,detail,pp:Math.round(total/numT)};
     });
     d.rows=rows;
     d.estimated=rows.reduce((a,x)=>a+x.total,0);
@@ -893,19 +905,36 @@ ${includeFlights?`- Flights to destination: $${fl[0]}–$${fl[1]}/person round-t
           itinArr.push(demoItineraryForGroup(g,{lang:tLang}));
         }
       } else {
+      // ── LIVE FACTS (free APIs through /api/data): real distances, weather, exchange rates, US gas price ──
+      let facts=null;
+      try{
+        setLoadMsg(lang==='es'?'🌐 Consultando datos reales (clima, cambio, rutas)…':'🌐 Fetching live data (weather, exchange, routes)…');
+        const names=[...new Set([originLabel,...destInfo.map(d=>d.name)].filter(Boolean))];
+        const legs=drivingTheRoute?destInfo.map((d,i)=>[i===0?originLabel:destInfo[i-1].name,d.name]):[];
+        const ac=new AbortController(); const to=setTimeout(()=>ac.abort(),20000);
+        const rr=await fetch('/api/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({places:names,start:sd,end:rd,legs}),signal:ac.signal});
+        clearTimeout(to); if(rr.ok) facts=await rr.json();
+      }catch(e){console.warn('live data unavailable',e.message);}
+      const liveGas=(facts?.gas?.usd&&dom)?facts.gas.usd:null;
+      const legInfo=(a,b)=>facts?.legs?.find(l=>l.from===a&&l.to===b);
+      const liveFor=(dn)=>{ if(!facts)return ''; const L=[]; const w=facts.weather?.[dn], c=facts.fx?.[dn];
+        if(w)L.push(`WEATHER (Open-Meteo, real data): ${w}`);
+        if(c)L.push(`CURRENCY (live rate): ${c.name} (${c.symbol||c.code}, ${c.code}) — 1 USD = ${c.perUSD||'?'} ${c.code}`);
+        return L.length?`REAL-TIME DATA — use these exact figures, do not contradict them:\n${L.join('\n')}`:''; };
       // ── BUDGET (with Google Search grounding for real prices) ──
       const budgetTasks=destInfo.map((dest,di)=>async()=>{
         const isFirstDest=di===0;
         const legOrigin=di===0?originLabel:destInfo[di-1].name; // each leg starts from the PREVIOUS stop, not always from home
         try{
-          const gasLine=drivingTheRoute?`Driving distance ${legOrigin}→${dest.name} (this leg only): estimate miles, calculate gas: (miles÷${PA.mpg})×$${PA.gas}/gal = $X total fuel for group, ÷${numT} per person.`:'';
+          const gp=liveGas||PA.gas; const li=legInfo(legOrigin,dest.name);
+          const gasLine=drivingTheRoute?(li?`REAL driving distance ${legOrigin}→${dest.name}: ${li.miles} miles one way (~${li.hours} h, measured by routing engine)${destInfo.length===1?`; the trip returns the same way, so the car covers about ${li.miles*2} miles in total for this stop`:''}. Fuel = (miles÷${PA.mpg})×$${gp}/gal${liveGas?' (live US average, EIA '+facts.gas.period+')':''}. Use EXACTLY these miles; do not recompute them.`:`Driving distance ${legOrigin}→${dest.name} (this leg only): estimate miles, calculate gas: (miles÷${PA.mpg})×$${gp}/gal = $X total fuel for group, ÷${numT} per person.`):'';
           const openJaw = isMultiStopTrip && includeFlights;
           const flightNote=isFirstDest?(includeFlights?(openJaw?`ONE-TIME FLIGHT: traveler flies from ${originCode} into ${legOrigin} at the START of the trip only — this flight cost belongs ONLY to this first destination's budget. Trip is open-jaw (returns from a different city).`:`Flight cost belongs ONLY to this first destination — traveler does not re-fly between every city.`):''):(includeFlights?`NO FLIGHT COST HERE — the one-time flight was already counted in destination #1's budget. Do NOT add a flight row here.`:'');
           const prompt=`You are a professional travel budget planner. Use REAL current ${yr} prices. Search for actual current hotel rates, attraction admission fees, and flight costs for ${dest.name}.
 
 ALL TEXT IN ${outputLang}. OUTPUT ONLY RAW JSON.
 
-${priceCtx}
+${liveGas?priceCtx.replace('$'+PA.gas+'/gal','$'+liveGas+'/gal'):priceCtx}
 ${famCtx}
 ${gasLine}
 ${flightNote}
@@ -920,9 +949,10 @@ MANDATORY CALCULATION RULES:
 2. Hotel: ${includeHotel?`${dest.days} nights × real current rate ($${h[0]}–$${h[1]}/night) × 1 room`:'$0 — day trip, returns home'}
 3. Food: ${dest.days} days × $X/day × ${numT} people (use real local costs)
 4. Attractions: list 3–5 real attractions with actual admission prices (search real prices)
-5. ${drivingTheRoute?`Gas: calculate driving miles ONLY for this leg (${legOrigin} to ${dest.name}), use $${PA.gas}/gal`:(includeFlights?'Flights: use current airline prices, include real airline names':'Local transport: estimate realistic public transit/rideshare costs')}
-6. STAY WITHIN BUDGET: the total MUST be ≤ $${perDestBudget}. If your first estimate is higher, pick cheaper real options (lower-priced hotel area, free/cheaper attractions, cheaper meals) until it fits. Only exceed it if impossible even at the minimum, and then say exactly what is short. Never invent prices — use searched current prices.
-7. note = one-sentence honest assessment including what's tight if over budget
+5. ${drivingTheRoute?`Gas: calculate driving miles ONLY for this leg (${legOrigin} to ${dest.name}), use $${gp}/gal`:(includeFlights?'Flights: use current airline prices, include real airline names':'Local transport: estimate realistic public transit/rideshare costs')}
+6. BE HONEST — NEVER FIT THE NUMBERS TO THE BUDGET. Price every row at its realistic current market cost: food at least $${f[0]}/person/day, hotel at least $${h[0]}/night, real admission prices for every place the traveler asked for (theme parks included), gas/tolls/parking when driving, and a small realistic Extras row. You MAY choose cheaper real options (budget hotel, free attractions, groceries for some meals) but NEVER write a price below what it really costs, and NEVER put $0 on a cost that exists. If the honest total is above $${perDestBudget}, report it as is, set viable=false, and say in 'note' exactly how much is missing and what to cut.
+7. Do all arithmetic silently BEFORE writing. Each 'detail' is ONE clean line with the final numbers only — never write 'wait', 'recalculating' or corrections — and each row's pp/total MUST equal the figure stated in its detail.
+8. note = one-sentence honest assessment including what's tight if over budget
 
 Return EXACTLY this JSON structure:
 {"budget":[{
@@ -934,13 +964,13 @@ Return EXACTLY this JSON structure:
     ${isFirstDest&&includeFlights?`{"icon":"✈️","cat":"${outputLang==='Spanish'?'Vuelos':'Flights'}","pp":0,"total":0,"detail":"[Real airline] One-time flight ${openJaw?'into '+legOrigin+' (open-jaw, returns from final destination city)':'round-trip'} from ${originCode}. ~$X/person. Total for ${numT}: $X","links":"Google Flights, Kayak"},`:''}
     {"icon":"🏨","cat":"${includeHotel?(outputLang==='Spanish'?'Hotel':'Hotel'):(outputLang==='Spanish'?'Alojamiento':'Accommodation')}","pp":${includeHotel?0:0},"total":${includeHotel?0:0},"detail":"${includeHotel?`[Hotel name area] ~$${h[0]}-${h[1]}/night × ${dest.days} nights = ~$X`:'Day trip — $0 hotel cost'}","links":"${includeHotel?'Booking.com, Airbnb':'N/A'}"},
     ${includeCar?`{"icon":"🚗","cat":"${outputLang==='Spanish'?'Carro':'Car Rental'}","pp":0,"total":0,"detail":"~$${c[0]}-${c[1]}/day × ${dest.days} days (this leg) = ~$X total","links":"Miles Car Rental, Hertz, Enterprise"},`:''}
-    {"icon":"⛽","cat":"${drivingTheRoute?(outputLang==='Spanish'?'Gasolina':'Gas & Tolls'):(outputLang==='Spanish'?'Transporte Local':'Local Transport')}","pp":0,"total":0,"detail":"${drivingTheRoute?`~X miles driving (${legOrigin}→${dest.name}) ÷ ${PA.mpg}mpg × $${PA.gas}/gal = ~$X fuel. Tolls: ~$X`:'Uber/Lyft/Metro/train ~$X/day × '+dest.days+' days'}","links":""},
+    {"icon":"⛽","cat":"${drivingTheRoute?(outputLang==='Spanish'?'Gasolina':'Gas & Tolls'):(outputLang==='Spanish'?'Transporte Local':'Local Transport')}","pp":0,"total":0,"detail":"${drivingTheRoute?`~X miles driving (${legOrigin}→${dest.name}) ÷ ${PA.mpg}mpg × $${gp}/gal = ~$X fuel. Tolls: ~$X`:'Uber/Lyft/Metro/train ~$X/day × '+dest.days+' days'}","links":""},
     {"icon":"🍽️","cat":"${outputLang==='Spanish'?'Comida':'Food & Dining'}","pp":0,"total":0,"detail":"$X/person/day × ${dest.days} days × ${numT} people = $X. Breakdown: breakfast $X, lunch $X, dinner $X","links":""},
     {"icon":"🎯","cat":"${outputLang==='Spanish'?'Atracciones':'Attractions'}","pp":0,"total":0,"detail":"List real attractions: [Name]: $X/adult${hasKidsFlag?', $X/child':''}. [Name2]: $X. [Name3]: Free. Total: ~$X/person","links":"Viator, GetYourGuide"},
     {"icon":"💼","cat":"${outputLang==='Spanish'?'Extras':'Extras'}","pp":0,"total":0,"detail":"Travel insurance ~$X, tips/gratuity ~$X, souvenirs ~$X, misc ~$X","links":""}
   ]
 }]}`;
-          const r=await callAI(prompt,7000,true); budgetArr[di]=fixBudget(r,numT,perDestBudget);
+          const r=await callAI(prompt,7000,true); budgetArr[di]=fixBudget(r,numT,perDestBudget,{hotel:includeHotel?h[0]*dest.days:0,food:f[0]*dest.days*numT});
         }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;console.warn('Budget error:',e.message);budgetArr[di]={budget:[]};}
       });
 
@@ -951,17 +981,19 @@ Return EXACTLY this JSON structure:
 Nationality: ${sanNat} | Travel: ${sd} to ${rd} | Style: ${style} | ${stayCtx} | ${kidsCtx} | Transport: ${drivingTheRoute?'driving/road trip':(includeFlights?'flying, using local transit':'')}
 ${famCtx}
 ${borderCtx}
+${liveFor(dest)}
 
+RETURN EXACTLY ONE object inside "tips" with ALL these fields filled (never a plain list of strings):
 {"tips":[{
   "dest":"${dest}",
   "tips":["specific practical tip with concrete details (names, prices, or numbers when relevant)","tip 2","tip 3","tip 4","tip 5","tip 6"],
   "familyTips":${hasKidsFlag?'["family-specific tip 1 for ages '+kidsAges.join(',')+'","tip 2","tip 3"]':'[]'},
   "docs":["specific document 1 with details (e.g. passport validity rule, specific form name)","doc 2","doc 3"],
   "visaInfo":"specific entry requirements for ${sanNat} citizens entering ${dest}'s country — visa-free / visa-on-arrival / e-visa / advance application, processing time, cost if any${crossingBorder?'. Since traveler is crossing by land, specifically confirm whether a land border crossing has different requirements than arriving by air.':''}",
-  "currency":"currency name, symbol, approximate exchange rate to USD, and whether USD is also widely accepted",
+  "currency":"currency name, symbol, exchange rate to USD (use the live rate given above if present), and whether USD is also widely accepted",
   "timezone":"timezone name, UTC offset, and difference from ${sanNat} time",
   "bestSeason":"best time of year to visit and why (weather, crowds, prices)",
-  "weather":"expected weather during ${sd}–${rd} with realistic temperature range in °F and °C, and rain/humidity expectations",
+  "weather":"weather during ${sd}–${rd} (copy the real Open-Meteo numbers given above if present) with realistic temperature range in °F and °C, and rain/humidity expectations",
   "clothing":"specific packing list items for this trip style, season, and any cultural dress norms (e.g. modest dress for religious sites)",
   "gettingAround":"how to get around once there: best apps (name them), public transit options and approximate cost, walkability, whether ride-share/taxis are common and roughly how much they cost",
   "safety":"general safety level, any neighborhoods or situations to be cautious about, common tourist scams to watch for and how to avoid them",
@@ -971,7 +1003,7 @@ ${borderCtx}
   "emergency":"police, ambulance, fire emergency numbers, plus the nearest embassy/consulate info if relevant for ${sanNat} citizens",
   "highlights":["top highlight 1 with a specific reason it's unmissable (not generic)","highlight 2","highlight 3"]
 }]}`;
-          const r=await callAI(prompt,5500); tipsArr[ti]=r;
+          const r=await callAI(prompt,5500); tipsArr[ti]=normTips(r,dest);
         }catch(e){if(e.code==='NO_KEY'||e.code==='BAD_KEY')throw e;tipsArr[ti]={tips:[]};}
       });
 
@@ -1054,7 +1086,7 @@ All ${g.days.length} days. ONLY JSON.`;
       for(let pass=0; pass<3; pass++){
         const redo=[];
         budgetTasks.forEach((t,i)=>{ if(!(budgetArr[i]?.budget?.length)) redo.push(t); });
-        tipTasks.forEach((t,i)=>{ if(!(tipsArr[i]?.tips?.length)) redo.push(t); });
+        tipTasks.forEach((t,i)=>{ if(!(tipsArr[i]?.tips?.[0]?.currency||tipsArr[i]?.tips?.[0]?.weather||tipsArr[i]?.tips?.[0]?.visaInfo)) redo.push(t); });
         itinTasks.forEach((t,i)=>{ if(!(itinArr[i]?.length)) redo.push(t); });
         if(!redo.length) break;
         setLoadMsg(tLang==='es'?`⏳ Reintentando ${redo.length} parte(s) (límite de la IA)…`:`⏳ Retrying ${redo.length} part(s) (AI rate limit)…`);
@@ -1314,7 +1346,7 @@ All ${g.days.length} days. ONLY JSON.`;
               <div style={{marginBottom:16}}>
                 {(()=>{
                   const isMultiStop = dests.filter(d=>d.name.trim()).length > 1;
-                  const startLabel = depCity || selectedTrip?.depCity || dests[0]?.name || (lang==='es'?'tu destino':'your destination');
+                  const startLabel = (dests[0]?.name||'').trim() || selectedTrip?.depCity || (lang==='es'?'tu destino':'your destination');
                   const crossBorderNow = !isDomestic && gettingThereMode==='drive';
                   return (
                     <>
